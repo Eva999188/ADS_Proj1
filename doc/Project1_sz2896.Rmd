@@ -1,0 +1,602 @@
+---
+title: "R Notebook"
+output:
+  html_document:
+    toc: yes
+  pdf_document:
+    toc: yes
+---
+
+## Step 0: check and install needed packages. Load the libraries and functions. 
+
+```{r, message=FALSE, warning=FALSE}
+packages.used=c("tibble", 
+                "sentimentr", "gplots", "dplyr",
+                "tm", "syuzhet", "factoextra", 
+                "scales", "RColorBrewer",
+                "RANN", "topicmodels", "stringr", "wordcloud", "tidytext")
+
+# check packages that need to be installed.
+packages.needed=setdiff(packages.used, 
+                        intersect(installed.packages()[,1], 
+                                  packages.used))
+# install additional packages
+if(length(packages.needed)>0){
+  install.packages(packages.needed, dependencies = TRUE)
+}
+
+# load packages
+
+library("tibble")
+library("syuzhet")
+library("sentimentr")
+library("gplots")
+library("dplyr")
+library("tm")
+library("syuzhet")
+library("factoextra")
+library("scales")
+library("RColorBrewer")
+library("RANN")
+library("tm")
+library("topicmodels")
+library("stringr")
+library("wordcloud")
+library("tidytext")
+```
+This notebook was prepared with the following environmental settings.
+
+```{r}
+print(R.version)
+```
+
+## Step 1: Data harvest: read the data in the CSV data sets
+
+```{r}
+df <- read.csv("philosophy_data.csv")
+```
+
+```{r}
+dim(df)
+```
+
+```{r}
+unique(df$author)
+```
+
+```{r}
+unique(df$school)
+```
+
+```{r}
+df %>%
+  group_by(school) %>%
+  summarise(author_num = n_distinct(author))
+```
+
+The dataset I use is the Philosophy dataset. This dataset contains 59 articles, which were written by 36 famous philosophers from 13 schools. As the dataset has already been cleaned with no missing values or abnormal inputs, there is no need for extra data cleaning.
+
+## Step 2: Data Processing - Generate emotion score for each sentence
+
+In this project, I will use sentences as units of analysis for this project, as sentences are natural languge units for organizing thoughts and ideas. I apply sentiment analysis using NRC Emotion Lexicon. "The NRC Emotion Lexicon is a list of English words and their associations with eight basic emotions (anger, fear, anticipation, trust, surprise, sadness, joy, and disgust) and two sentiments (negative and positive). The annotations were manually done by crowdsourcing." 
+
+```{r}
+# data with number of tokens
+word_count <- function(str){
+  return(str_count(str, '\\w+'))
+}
+
+token_data <- df %>%
+  mutate(n_tokens = word_count(df$tokenized_txt))
+```
+
+```{r}
+#  Sentiments for each sentence
+sentiment_score <- function(df){
+  sentence <- df %>% 
+    select(c("title", "author", "school", "sentence_str", 
+             "original_publication_date")) %>%
+    mutate(id = 1:nrow(df))
+  
+  sentence$sentence_str <- as.character(sentence$sentence_str)
+  emotions <- get_nrc_sentiment(sentence$sentence_str)
+  sentence <- bind_cols(sentence, emotions)
+  
+  output_dp <- "sentence_emotion.csv"
+  write.csv(sentence, output_dp)
+  return(output_dp)
+}
+```
+
+```{r}
+# FInd a maximum index
+random_max <- function(a){
+  sample(which(a == max(a)), 1)
+}
+```
+
+```{r}
+# Get top emotion and its score
+top_emotion <- function(processed_df){
+  sentence <- read.csv(processed_df)
+  
+  # Get the top emotion of each sentence
+  sentence$top <- sentence %>%
+    select(anger:trust) %>%
+    apply(1, random_max)
+  
+  # Get the emotion score for the top emotion
+  sentence$top.a <- sentence %>%
+    select(anger:trust) %>%
+    apply(1, max)
+
+  sentence$top[sentence$top.a == 0] <- 9
+  return(sentence)
+}
+```
+
+```{r}
+# Get top sentiment and its score
+sentence_sentiment <- function(processed_df){
+  sentence <- read.csv(processed_df)
+  
+  # Get the sentiment of each sentence
+  sentence$sentiment <- sentence %>%
+    select(negative:positive) %>%
+    apply(1, random_max)
+  
+  # Get the sentiment score
+  sentence$sentiment.a <- sentence %>%
+    select(negative:positive) %>%
+    apply(1, max)
+
+  sentence$sentiment[sentence$sentiment.a == 0] <- 3
+  return(sentence)
+}
+```
+
+```{r}
+# processed_df <- sentiment_score(df)
+processed_df <- "sentence_emotion.csv"
+emotion_score <- read.csv("sentence_emotion.csv")
+head(emotion_score)
+```
+
+```{r}
+top_emotion <- top_emotion(processed_df)
+head(top_emotion)
+```
+
+```{r}
+sentence_sentiment <- sentence_sentiment(processed_df)
+head(sentence_sentiment)
+```
+
+We can see emotion score for each sentence.
+
+## Step 3: Basic Data Analysis 
+
+#### 3.1 Articles and Sentences Each School Published
+
+First, I want to know which school is the most productive, i.e how many articles each school publish? And how many sentences each school write?
+
+```{r}
+# title_per_school
+title_per_school <- df %>%
+  group_by(school) %>%
+  summarise(title_per_school = n_distinct(title)) %>%
+  arrange(desc(title_per_school))
+
+title_per_school
+```
+
+```{r}
+title_per_school %>%
+  ggplot(aes(x = school, y = title_per_school)) +
+  geom_bar(stat = "identity", fill="#f68060", alpha=.6, width=.4) +
+  coord_flip() +
+  xlab("School") +
+  ylab("Number of Titles") +
+  theme_bw() +
+  labs(title = "Number of Titles per school")
+```
+
+We can find "analytic" published most articles, followed by "german_idealism", while "aristotle" and "plato" had the least titles.
+
+```{r}
+# sentence_per_school
+sentence_per_school <- df %>%
+  group_by(school) %>%
+  summarise(sentence_per_school = n_distinct(sentence_str)) %>%
+  arrange(desc(sentence_per_school))
+
+sentence_per_school
+```
+
+```{r}
+sentence_per_school %>%
+  ggplot(aes(x = school, y = sentence_per_school)) +
+  geom_bar(stat = "identity", fill="#f68060", alpha=.6, width=.4) +
+  coord_flip() +
+  xlab("School") +
+  ylab("Number of Sentences") +
+  theme_bw() +
+  labs(title = "Number of Sentences per School")
+```
+
+How about sentences?
+
+We can see from the graph that "analytic" and "aristotle" dominated in the number of sentences contained in the dataset, which "stoicism" published much less sentences than other schools.
+
+
+#### 3.2 Correlation
+
+Is there any Correlation between number of sentences and number of articles?
+
+As we always think about, the more articles each school published, the more sentences each school published. However, as we found before, the more number of sentences does not mean more titles. What was really surprising is that "Aristotle" only had one article in the dataset, it ranked the second in the number of sentences. "Plato" was also a surprise to me. So that I want to know how many sentences there was in each articles.
+
+```{r}
+# sentence_per_title
+sentence_per_title <- df %>%
+  group_by(title) %>%
+  summarise(sentence_per_title = n_distinct(sentence_str)) %>%
+  arrange(desc(sentence_per_title))
+```
+
+```{r}
+sentence_per_title %>%
+  ggplot(aes(x = title, y = sentence_per_title)) +
+  geom_bar(stat = "identity", fill="#f68060", alpha=.6, width=.4) +
+  coord_flip() +
+  xlab("Title") +
+  ylab("Number of Sentences") +
+  theme_bw() +
+  labs(title = "Number of Sentences per Title") +
+  theme(axis.text.y = element_text(size = 5))
+```
+
+Not surprising, the number of sentences in the article of "Aristotle" and "Plato" were remarkable.
+
+#### 3.3 Variation according to the time 
+
+What if we see the data in the time frame? Does the length of sentences vary over the year?
+
+```{r}
+sentence_length_year <- df %>%
+  group_by(original_publication_date) %>%
+  summarize(mean_sentence_length = mean(sentence_length)) %>%
+  arrange(desc(mean_sentence_length))
+
+# visualize
+ggplot(sentence_length_year, aes(x = original_publication_date, y = mean_sentence_length)) + 
+  geom_line() +
+  labs(title = "Length of Sentences Over the Years")
+```
+
+We can see that in the early days, the sentences were usually brief, as the time went by, they became more and more rich, reaching peak at around 1600s. Then a sharp decrease, followed by fluctuation until now.
+
+## Step 4: Data Analysis - Sentiment Analysis
+
+How did the emotion distribute in the philosophy texts?
+
+```{r}
+emotion <- c("anticipation", "joy", "surprise", "trust", "anger", 
+             "disgust", "fear", "sadness", "neutral")
+col <- c("pink", "purple", "orange", "brown", "red", "green", "yellow", "blue", "black")
+```
+
+
+```{r}
+top_emotion %>% ggplot(aes(x = top)) +
+    geom_bar(aes(y = (..count..)/sum(..count..)),
+             fill = col) +
+    scale_x_discrete(limits = emotion) +
+    scale_y_continuous(labels = scales::percent,
+                       limits = c(0, .3)) +
+    labs(title = "Overall Emotions In the Philosophy Texts",
+         x = "Emotion", y = "Percentage of Sentences") +
+    theme_linedraw()
+
+```
+
+The graph shows overall emotions that distributed in all philosophy texts. Less than 30% the philosophy texts were neutral with no emotion in it, which was a little surprising, since as I previously thought, philosophical texts are plain with lots of terminology. Besides, anticipation and joy are the major types of emotions expressed in the philosophical texts, taking around 30% of the overall sentences. 
+
+How about the sentiment?
+
+```{r}
+sentiment <- c("negative", "positive", "neutral")
+col_sentiment <- c("red", "green", "black")
+```
+
+```{r}
+sentence_sentiment %>% ggplot(aes(x = sentiment)) +
+    geom_bar(aes(y = (..count..)/sum(..count..)),
+             fill = col_sentiment) +
+    scale_x_discrete(limits = sentiment) +
+    scale_y_continuous(labels = scales::percent,
+                       limits = c(0, .5)) +
+    labs(title = "Overall Sentiment In the Philosophy Texts",
+         x = "Sentiment", y = "Percentage of Sentences") +
+    theme_linedraw()
+```
+
+We could find that negative took up about half of the overall philosophy texts. A thing that is a bit weird is that when we analyzed emotions, we found anticipation and joy are the major types of emotions, while when considering about the sentiment, we found negative dominated. Does it mean that emotion is not equal to sentiment?
+
+Is there any difference in each school? Since philosophers from different schools usually had different even contradicting ideas and beliefs, so how about emotions or sentiment?
+
+Do philosophers from different schools of philosophy tend to express different emotions or sentiment in their articles? 
+
+```{r}
+top_emotion$top <- as.factor(top_emotion$top)
+top_emotion$school <- as.factor(top_emotion$school)
+levels(top_emotion$top) <- emotion
+  
+top_emotion %>% group_by(school) %>%
+  count(top) %>% mutate(per = n / sum(n)) %>%
+  ggplot(aes(fill = top, x = school, y = per)) +
+  geom_bar(stat="identity", position="stack") +
+  scale_fill_manual(values = col) +
+  labs(title = "Percentage of Emotions for Each School",
+         x = "School", y = "Percentage") +
+  scale_y_continuous(labels = scales::percent) +
+  theme_linedraw() +
+  theme(legend.title = element_blank(),
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+```
+
+As shown in graph, the differences in terms of emotions are little across 13 schools. This suggests that on average, philosophers from different schools tended to express the similar types of emotion even when they had very different thoughts or ideas. 
+
+```{r}
+sentence_sentiment$sentiment <- as.factor(sentence_sentiment$sentiment)
+sentence_sentiment$school <- as.factor(sentence_sentiment$school)
+levels(sentence_sentiment$sentiment) <- sentiment
+  
+sentence_sentiment %>% group_by(school) %>%
+  count(sentiment) %>% mutate(per = n / sum(n)) %>%
+  ggplot(aes(fill = sentiment, x = school, y = per)) +
+  geom_bar(stat="identity", position="stack") +
+  scale_fill_manual(values = col_sentiment) +
+  labs(title = "Percentage of Emotions for Each School",
+         x = "School", y = "Percentage") +
+  scale_y_continuous(labels = scales::percent) +
+  theme_linedraw() +
+  theme(legend.title = element_blank(),
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+```
+
+So did sentiment.
+
+## Step 5: Data Analysis - Cluster Emotions of Authors
+
+```{r}
+emotion_summary <- read.csv("sentence_emotion.csv") 
+```
+
+```{r}
+set.seed(20220202)
+
+emotion_school <- emotion_summary%>%
+  group_by(school)%>%
+  summarise(
+    anger=mean(anger),
+    anticipation=mean(anticipation),
+    disgust=mean(disgust),
+    fear=mean(fear),
+    joy=mean(joy),
+    sadness=mean(sadness),
+    surprise=mean(surprise),
+    trust=mean(trust),
+    negative=mean(negative),
+    positive=mean(positive)
+  )
+
+emotion_school = as.data.frame(emotion_school)
+rownames(emotion_school) = as.character((emotion_school[,1]))
+km.res=kmeans(emotion_school[,-1], iter.max=200,4)
+fviz_cluster(km.res, 
+             stand=F, repel= TRUE,
+             data = emotion_school[,-1], xlab="", xaxt="n",
+             show.clust.cent=FALSE)
+```
+
+```{r}
+set.seed(20220202)
+
+emotion_author <- emotion_summary%>%
+  group_by(author)%>%
+  summarise(
+    anger=mean(anger),
+    anticipation=mean(anticipation),
+    disgust=mean(disgust),
+    fear=mean(fear),
+    joy=mean(joy),
+    sadness=mean(sadness),
+    surprise=mean(surprise),
+    trust=mean(trust),
+    negative=mean(negative),
+    positive=mean(positive)
+  )
+
+emotion_author = as.data.frame(emotion_author)
+rownames(emotion_author) = as.character((emotion_author[,1]))
+km.res=kmeans(emotion_author[,-1], iter.max=200,4)
+fviz_cluster(km.res, 
+             stand=F, repel= TRUE,
+             data = emotion_author[,-1], xlab="", xaxt="n",
+             show.clust.cent=FALSE)
+```
+
+
+As we know, ancient Greek philosopher contemplated about human nature and behaviors, such as Plato and Aristotle, it is not surprising that they are in the same cluster when applying clutsering method.
+
+## Step 6: Data Analysis - Word Cloud
+
+``` {r}
+word_cloud <- function(data,select_school){
+  text <- data %>% 
+  select(school, author, title, sentence_lowered, original_publication_date) %>%
+  filter(school == select_school )
+  
+  # Create a corpus  
+  my_custom_stopwords <- c("one", "will", "may","things", "say",
+                      "can", "now", "even", "also", "must","whether")
+  corpus <- VCorpus(VectorSource(text$sentence_lowered))
+  corpus<- tm_map(corpus, removeNumbers)
+  corpus <- tm_map(corpus, removeWords, stopwords("english"))
+  corpus <- tm_map(corpus, removePunctuation)
+  corpus <- tm_map(corpus, stripWhitespace)
+  corpus <- tm_map(corpus, removeWords, my_custom_stopwords)
+  tdm <- TermDocumentMatrix(corpus)
+  
+  m <- as.matrix(tdm)
+  v <- sort(rowSums(m), decreasing = TRUE)
+  d <- data.frame(words = names(v), freq=v)
+  analytic <- d
+  
+  set.seed(20220202)
+  wordcloud(words = d$word, freq = d$freq, min.freq = 10,
+            max.words=150, random.order=FALSE, rot.per=0.3,
+            colors=brewer.pal(8, "Dark2"), scale = c(4, 0.5))
+}
+
+```
+
+
+``` {r, warning=FALSE}
+word_cloud(df,"aristotle")
+```
+
+``` {r, warning=FALSE}
+word_cloud(df,"plato")
+```
+
+In the theory of Forms, Plato presented a solution to the problem of universals. he used lots of words such as "think", "soul", "good".
+
+``` {r, warning=FALSE}
+word_cloud(df,"empiricism")
+```
+
+There is no surprising that "idea", "mind", "knowledge" appears a lot in the articles of empiricism.
+
+``` {r, warning=FALSE}
+word_cloud(df,"rationalism")
+```
+
+
+``` {r, warning=FALSE}
+word_cloud(df,"analytic")
+```
+
+For philosophers in the school of analytic, they attached importance to "true", "theory", "fact", "truth".
+
+``` {r, warning=FALSE}
+word_cloud(df,"continental")
+```
+
+``` {r, warning=FALSE}
+word_cloud(df,"phenomenology")
+```
+
+For philosophers in the school of phenomenology, they attached importance to "world", "experience", "consciousness", "object".
+
+``` {r, warning=FALSE}
+word_cloud(df,"german_idealism")
+```
+
+``` {r, warning=FALSE}
+word_cloud(df,"communism")
+```
+
+For philosophers in the school of communism, they attached importance to "labour", "power", "production", "value".
+
+``` {r, warning=FALSE}
+word_cloud(df,"capitalism")
+```
+
+For philosophers in the school of capitalism, they attached importance to "price", "money" and "capital".
+
+``` {r, warning=FALSE}
+word_cloud(df,"stoicism")
+```
+
+``` {r, warning=FALSE}
+word_cloud(df,"nietzsche")
+```
+
+``` {r, warning=FALSE}
+word_cloud(df,"feminism")
+```
+
+"Woman" contributes most in the articles of feminism.
+
+Interested in feminism, how did scholar think about feminism as the time when by?
+
+```{r}
+greek <- df %>%
+  select(school, author, title, sentence_lowered, original_publication_date) %>%
+  filter(original_publication_date==-350|original_publication_date==-320) %>%
+  filter(school == "feminism" )
+
+modern <- df %>%
+  select(school, author, title, sentence_lowered, original_publication_date) %>%
+  filter(original_publication_date>1600&original_publication_date<=1800) %>%
+  filter(school == "feminism" )
+
+contemporary <- df %>%
+  select(school, author, title, sentence_lowered, original_publication_date) %>%
+  filter(original_publication_date>1800) %>%
+  filter(school == "feminism" )
+```
+
+```{r}
+wordcloud_time <- function(time_data){
+
+  # Create a corpus  
+  my_custom_stopwords <- c("one", "will", "may","things", "say",
+                      "can", "now", "even", "also", "must","whether")
+  corpus <- VCorpus(VectorSource(time_data$sentence_lowered))
+  corpus<- tm_map(corpus, removeNumbers)
+  corpus <- tm_map(corpus, removeWords, stopwords("english"))
+  corpus <- tm_map(corpus, removePunctuation)
+  corpus <- tm_map(corpus, stripWhitespace)
+  corpus <- tm_map(corpus, removeWords, my_custom_stopwords)
+  tdm <- TermDocumentMatrix(corpus)
+  
+  m <- as.matrix(tdm)
+  v <- sort(rowSums(m), decreasing = TRUE)
+  d <- data.frame(words = names(v), freq=v)
+  analytic <- d
+  
+  wordcloud(words = d$word, freq = d$freq, min.freq = 10,
+            max.words=150, random.order=FALSE, rot.per=0.3,
+            colors=brewer.pal(8, "Dark2"), scale = c(4, 0.5))
+}
+
+```
+
+```{r}
+wordcloud_time(modern)
+```
+
+```{r}
+wordcloud_time(modern)
+```
+
+From the words cloud for feminism in modern philosophy, we can see that philosophers talked a lot about nature, love, respect and mind, which related more about psychology.
+
+```{r}
+wordcloud_time(contemporary)
+```
+
+In contemporary philosophy, there are more words related to science and responsibility, such as "husband", "wife", "black", "white". Philosophers focus more on rational and logical sides. 
+
+# Conclusion
+
+There is no correlation between the number of sentences and the number of articles each school published. 
+
+A large part of sentences in the philosophical articles are emotional neutral, while anticipation and joy took a large part. As for sentiment, proportions of negative sentences are larger than that of positive. Besides, philosophers from different schools tend to express similar emotion and sentiment even when they had different thoughts.
+
+There are similarities between different schools and philosophers, and the ideas of philosophers also changed as the time went by.
+
+Although due to the limitations of the data set, the data is still biased to some extent, since it did not include all the philosophers and their articles. Besides, there many sentences have mixed emotions or sentiments which need more specific analysis such as aspected-based classification, based on sentence is not enough.
